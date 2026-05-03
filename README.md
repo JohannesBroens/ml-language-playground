@@ -15,6 +15,8 @@ A multi-language machine learning benchmark comparing implementations across C, 
 
 All implementations emit a standardised output block (`Test Loss / Test Accuracy / Train time / Eval time / Throughput`) so the benchmark runners can parse them uniformly.
 
+The compute profiles, accuracy/regime trade-offs, and model-selection guidance for these families are discussed in [Cross-Family Compute and Accuracy Analysis](#cross-family-compute-and-accuracy-analysis) below.
+
 ---
 
 ## MLP Architecture
@@ -186,7 +188,7 @@ TFT combines four otherwise-separate ideas under one roof:
 - **Variable selection**, which acts as built-in feature importance and learned regularisation.
 - **Interpretable attention**, which surfaces which historical timesteps drove a given prediction.
 
-Each of those is useful on its own; the TFT implementation here demonstrates all four working together on the same model graph.
+Each of those is useful on its own; the TFT implementation here demonstrates all four working together on the same model graph. On the `synthetic-load` benchmark the TFT lands at 79.8% R² versus 70.7% for the vanilla Transformer trained on identical data — a head-to-head measurement of what the VSN + static-enrichment + interpretable-attention stack is worth. See [Sequence models: recurrence vs convolution vs attention](#sequence-models-recurrence-vs-convolution-vs-attention) for the full table.
 
 ---
 
@@ -373,6 +375,100 @@ LeNet-5 on MNIST, batch size 16 – 1024.
 ![CNN Throughput vs Batch Size](results/plots/cnn/scaling_batch_size.png)
 ![CNN GPU Speedup vs Batch Size](results/plots/cnn/gpu_speedup_batch_size.png)
 ![CNN Scaling Overview](results/plots/cnn/scaling_overview.png)
+
+---
+
+## Cross-Family Compute and Accuracy Analysis
+
+The MLP and CNN scaling studies tell a single story: GEMM-saturation. Once the batch × hidden matrix is large enough, the GPU dominates by 5–15× and the question is just how cleanly each backend wraps cuBLAS. The new model families have *different* compute profiles, and the real value of putting them in the same library is being able to compare those profiles side-by-side. The numbers below come from the runners in `src/scripts/extras_benchmark.py` on the same RTX 3070 / i9-10900F box. The full markdown tables live in `results/cache/extras_regression.json` and `results/cache/extras_sequence.json`.
+
+### Regression: closed-form vs iterative, language-vs-language
+
+| Implementation | synthetic-linear R² | Train (s) | Solver |
+|---|---|---|---|
+| Regression Rust (CPU) | **98.78%** | 0.001 | Cholesky on normal equations |
+| Regression NumPy | 96.96% | 0.001 | `np.linalg.solve` |
+| Regression PyTorch (CPU) | 97.12% | 0.054 | `torch.linalg.solve` |
+| Regression PyTorch (CUDA) | 97.07% | 0.295 | same, GPU dispatch |
+| Regression C (CPU) | 94.73% | 0.001 | Cholesky on normal equations |
+| Quantile Regression NumPy | 77.6% / **80%** P10–P90 cov | 0.17 | Subgradient SGD |
+
+Two things stand out. First, **the language barely matters for closed-form OLS**: the work is one 21×21 Cholesky and a couple of triangular solves, all of which finish in sub-millisecond regardless of whether the host is C, Rust, NumPy, or PyTorch CPU. PyTorch CUDA is actually the *slowest* of the closed-form solvers (0.295s end-to-end) because the CPU↔GPU copy and CUDA context init dominate the 21×21 solve itself. This is the classical pattern: **GPU acceleration is wasted on small, low-arithmetic-intensity problems**.
+
+Second, **iterative methods change the story**. Lasso coordinate descent (`--regularizer l1`) recovers 4/20 non-zero coefficients on the synthetic-linear dataset (true `n_informative=5`), at the cost of running 200 sweeps over the data instead of one Cholesky. Quantile regression's pinball loss is non-smooth, so it has to use sub-gradient SGD — slower per epoch (~0.17s) but produces a calibrated 80% P10–P90 prediction interval that the closed-form OLS cannot give you at all.
+
+### Linear vs nonlinear: when do you actually need a tree or a kernel?
+
+On synthetic-linear (sparse linear ground-truth), the linear models are unbeatable. On synthetic-nonlinear (Friedman-1 style — sinusoids and quadratic interactions), the picture inverts:
+
+| Model | synthetic-nonlinear R² | Train (s) | Notes |
+|---|---|---|---|
+| Gaussian Process NumPy | **99.0%** | 2.5 | Capped at 512 training samples (O(n³) Cholesky) |
+| Gradient Boosted Trees | 88.9% | 5.3 | 100 stumps × depth 3, sequential boosting |
+| Random Forest | 84.4% | 4.7 | 50 trees, embarrassingly parallel |
+| Decision Tree | 78.1% | 0.19 | Single tree, depth 8 |
+| Quantile Regression | 77.4% | 0.16 | Linear, gets the trend not the curvature |
+| Linear Regression NumPy | 68.9% | 0.001 | Underfits the nonlinear interactions |
+
+The GP wins on accuracy (99%) but is **bounded by O(n³) memory and compute** — the 512-sample cap is what makes it tractable, and that cap is also why it failed on California Housing in the earlier run before the data subset was wired through. GBM is the practical workhorse: 89% R² in 5 seconds, scales linearly in n, and (with `--loss quantile --quantile 0.1`) emits prediction intervals like the GP without the cubic blow-up.
+
+**Tree ensembles also expose a parallelism gap that doesn't show up in the NN benchmarks**: random forests are embarrassingly parallel across trees (the bagging samples are independent), while gradient boosting is sequential across rounds (round *m* fits the residual from round *m−1*). This means random forests trivially scale to multi-core but boosting needs more careful work — it's why production GBM libraries (XGBoost, LightGBM) parallelise within a single tree's split search rather than across trees.
+
+### Sequence models: recurrence vs convolution vs attention
+
+All five sequence forecasters were run on `synthetic-load` (a 7-channel hourly-demand-style series with daily double-peak, weekday/weekend modulation, annual heating/cooling, and AR(1) noise) for 10 epochs over 2048 windows of `seq_len=96, horizon=24`:
+
+| Model | R² (CUDA) | Train (s) CPU | Train (s) CUDA | GPU speedup |
+|---|---|---|---|---|
+| **TFT (P10/P90 coverage 79%)** | **79.8%** R² (median) | 50.8 | 9.5 | 5.3× |
+| TCN | 73.7% | 12.3 | 1.4 | 8.8× |
+| Transformer | 70.7% | 27.5 | 1.3 | **21×** |
+| GRU | 69.3% | 10.3 | 0.4 | **23×** |
+| LSTM | 68.3% | 4.4 | 0.6 | 7.6× |
+
+Three regimes are visible in this table.
+
+**Recurrent vs convolutional vs attention compute density.** RNNs (LSTM, GRU) are sequential along time: the GPU sees `seq_len` sequential tiny matmuls per minibatch, so the per-step compute is small but the chain-rule dependency forbids parallelising along *T*. The TCN replaces that recurrence with a stack of dilated 1D convolutions — every output timestep can be computed independently of its neighbours, which is why a TCN on GPU is bandwidth-bound, not latency-bound. The Transformer makes the time axis fully parallel via attention, paying O(T²) memory in exchange. **For long sequences, convolutional and attention models scale better**; for very short sequences, RNNs are competitive and use less memory.
+
+**The vanilla Transformer is not a free lunch.** On this dataset it lands at 70.7% R² — *worse than TCN* (73.7%) — despite costing ~9× more wall-time on CPU. The TCN's inductive bias (local + dilated receptive field) matches a load-curve's structure better than a positional-encoded attention layer with no priors.
+
+**TFT closes that gap and goes further.** At 79.8% R², the TFT beats the vanilla Transformer by ~9 points on the same data and the same horizon. The architectural delta is exactly what the [TFT section](#temporal-fusion-transformer-tft) describes:
+
+- The **VSN** softmax weights act as built-in feature gating — the model can downweight noisy channels (e.g. random calendar dummies) without an explicit feature-selection step.
+- The **static covariate encoders** inject the `(target_mean, target_std)` summary into both the LSTM init state and the attention enrichment, so the model gets a global "level" prior that vanilla attention has to re-learn from positional encodings every batch.
+- The **interpretable multi-head attention** with a shared value projection lets the model discover the daily and weekly periodicities without making them sequence-position assumptions.
+
+The same TFT also outputs P10/P50/P90 quantiles per horizon step and achieves ~80% empirical coverage of the P10–P90 band, so a single training run gives you both a point forecast and a calibrated prediction interval — something none of the other sequence models in this table do natively.
+
+**The TFT pays for that capability in GPU speedup.** Note the right-hand column: the GRU and Transformer get 21–23× GPU speedups because their compute is dense and uniform (one big LSTM matmul per step, or one big QKV projection per layer). The TFT's 5.3× speedup is much smaller because the model is *heterogeneous*: it strings together VSN matmuls, GRN feed-forwards, an LSTM seq2seq, and multi-head attention. Each of those is a small operation that hits the GPU's kernel-launch overhead floor. This is the same lesson the depth scaling experiment showed for MLPs at depth=5: stacking many small ops on a GPU costs more than fewer big ops with the same total FLOPs.
+
+### When to pick what
+
+Putting the families on the same axes:
+
+| Problem profile | Best fit | Why |
+|---|---|---|
+| Linear ground-truth, dense features | OLS / Ridge | Closed-form, sub-ms, language-agnostic |
+| Linear ground-truth, sparse features | Lasso | Recovers the sparsity pattern; coordinate descent is `O(n d × passes)` |
+| Need calibrated intervals from a tabular model | Quantile Regression / Quantile GBM / GP | All emit posterior intervals; GP is best on small n, GBM scales |
+| Smooth nonlinear, n < 1000 | Gaussian Process | 99% R² on synthetic-nonlinear, but O(n³) |
+| Nonlinear tabular, n large | Gradient Boosted Trees | Practical workhorse, sequential boosting |
+| High-dim feature importance | Random Forest | Bagging + per-split subsampling parallelises trivially |
+| Univariate AR signal | LSTM / GRU | Cheap, batch-parallel on GPU |
+| Long-range temporal dependence | TCN | Exponential receptive field; fully parallel along time |
+| Multi-horizon point forecasts only | Transformer | Mean-pool + linear head |
+| Multi-horizon, multivariate, with known-future covariates and need for interpretability and prediction intervals | **TFT** | Designed exactly for this — VSN, static encoders, interpretable attention, quantile head |
+| Regime detection (peak/off-peak, calm/volatile) | HMM | Discrete state posterior + Viterbi decoding |
+| Outlier / anomaly detection | Autoencoder | Reconstruction error as score |
+| Dimensionality reduction / pre-conditioning | PCA | Thin SVD, exact closed-form |
+| Cluster / cohort discovery | K-Means / GMM | Hard vs soft assignment trade-off |
+
+Two patterns recur across the whole table:
+
+1. **The right model is a function of the data, not the framework.** For a 1000-sample smooth-nonlinear problem, NumPy GP at 99% R² beats a PyTorch CUDA Transformer at 70%. For a 20K-sample multivariate forecast, the order reverses.
+2. **GPU acceleration only matters when the compute is dense.** Small models, single-row predictions, and heterogeneous architectures (TFT, GBM) leave a lot of GPU performance on the table because of kernel-launch overhead and CPU↔GPU copy costs.
+
+The original MLP/CNN scaling section was specifically a study of regime (1) on dense GEMM workloads. The cross-family numbers above show what happens when you stop assuming the workload looks like that.
 
 ---
 

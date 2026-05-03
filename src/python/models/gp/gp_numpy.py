@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gaussian Process regression with an RBF + white-noise kernel.
+r"""Gaussian Process regression with an RBF + white-noise kernel.
 
 Closed-form posterior:
     K = k(X, X) + sigma_n^2 I
@@ -89,7 +89,8 @@ def main():
     parser = argparse.ArgumentParser(description="Gaussian Process Regression (NumPy)")
     parser.add_argument("--dataset", default="synthetic-nonlinear",
                         choices=["synthetic-linear", "synthetic-nonlinear",
-                                 "concrete", "wine-quality-reg"])
+                                 "concrete", "wine-quality-reg",
+                                 "california-housing"])
     parser.add_argument("--num-samples", type=int, default=512)
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--learning-rate", type=float, default=0.05)

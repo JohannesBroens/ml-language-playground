@@ -33,10 +33,15 @@ PATTERN_EVAL = re.compile(r"Eval time:\s+([\d.]+)\s*s")
 PATTERN_THROUGHPUT = re.compile(r"Throughput:\s+([\d.]+)\s*samples/s")
 
 
-def _build_cmd(template, dataset):
+def _build_cmd(template, dataset, overrides=None):
     cmd = (template
            .replace("{python}", sys.executable)
            .replace("{dataset}", dataset))
+    if overrides:
+        for k, v in overrides.items():
+            # Only append flag if not already present in the template
+            if f"--{k}" not in cmd:
+                cmd = cmd + f" --{k} {v}"
     return cmd
 
 
@@ -94,12 +99,18 @@ def run_one(label, cmd, timeout=600):
     return parsed
 
 
-def run_family(family_path):
+def run_family(family_path, overrides=None, dataset_filter=None,
+               impl_filter=None, save_json=None):
     with open(family_path) as f:
         cfg = yaml.safe_load(f)
     bench = cfg.get("benchmark", {})
     datasets = bench.get("datasets", [])
+    if dataset_filter:
+        datasets = [d for d in datasets if d in dataset_filter]
     impls = cfg.get("implementations", [])
+    if impl_filter:
+        impls = [im for im in impls
+                 if any(f.lower() in im["name"].lower() for f in impl_filter)]
     timeout = cfg.get("scaling", {}).get("timeout", 600)
     results = {}                # results[dataset][label] = parsed
     for ds in datasets:
@@ -109,7 +120,7 @@ def run_family(family_path):
             if not _is_available(label):
                 continue
             ds_eff = impl.get("dataset_override") or ds
-            cmd = _build_cmd(impl["cmd"], ds_eff)
+            cmd = _build_cmd(impl["cmd"], ds_eff, overrides=overrides)
             t0 = time.monotonic()
             parsed = run_one(label, cmd, timeout=timeout)
             wall = time.monotonic() - t0
@@ -121,7 +132,13 @@ def run_family(family_path):
                   + (f"loss={parsed['loss']:.3f}  acc={parsed['acc']:.2f}%"
                      if parsed else "FAILED"))
             if parsed:
+                parsed["wall_total"] = wall
                 results[ds][label_disp] = parsed
+    if save_json:
+        import json
+        os.makedirs(os.path.dirname(save_json), exist_ok=True)
+        with open(save_json, "w") as f:
+            json.dump(results, f, indent=2, sort_keys=True)
     return results
 
 
@@ -139,21 +156,45 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark driver for regression/sequence model families")
     parser.add_argument("--family", default="regression",
                         choices=["regression", "sequence", "all"])
+    parser.add_argument("--epochs", type=int, default=None,
+                        help="Override training epochs across all impls")
+    parser.add_argument("--num-samples", type=int, default=None,
+                        help="Override --num-samples on all impls")
+    parser.add_argument("--datasets", type=str, default=None,
+                        help="Comma-separated subset of datasets")
+    parser.add_argument("--impls", type=str, default=None,
+                        help="Comma-separated substring filter on impl names")
+    parser.add_argument("--save-json", type=str, default=None,
+                        help="Path to save raw results as JSON (default: results/cache/extras_<family>.json)")
     args = parser.parse_args()
+
+    overrides = {}
+    if args.epochs is not None: overrides["epochs"] = args.epochs
+    if args.num_samples is not None: overrides["num-samples"] = args.num_samples
+    ds_filter = args.datasets.split(",") if args.datasets else None
+    impl_filter = args.impls.split(",") if args.impls else None
 
     if args.family in ("regression", "all"):
         path = os.path.join(CONFIGS_DIR, "regression.yaml")
         print("=" * 70)
         print("  Regression family")
         print("=" * 70)
-        results = run_family(path)
+        save = args.save_json or os.path.join(PROJECT_ROOT, "results", "cache", "extras_regression.json")
+        results = run_family(path, overrides=overrides,
+                              dataset_filter=ds_filter, impl_filter=impl_filter,
+                              save_json=save)
         print_markdown(results, "regression")
     if args.family in ("sequence", "all"):
         path = os.path.join(CONFIGS_DIR, "sequence.yaml")
         print("\n" + "=" * 70)
         print("  Sequence family")
         print("=" * 70)
-        results = run_family(path)
+        save = args.save_json or os.path.join(PROJECT_ROOT, "results", "cache", "extras_sequence.json")
+        if args.family == "all":
+            save = os.path.join(PROJECT_ROOT, "results", "cache", "extras_sequence.json")
+        results = run_family(path, overrides=overrides,
+                              dataset_filter=ds_filter, impl_filter=impl_filter,
+                              save_json=save)
         print_markdown(results, "sequence")
 
 
