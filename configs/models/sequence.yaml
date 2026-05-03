@@ -1,0 +1,60 @@
+# Sequence-model family — LSTM, GRU, 1D TCN, vanilla Transformer encoder,
+# Temporal Fusion Transformer (TFT), and the autoencoder anomaly detector.
+# All accept a (batch, seq_len, num_features) tensor and predict a horizon
+# vector (or a quantile cube for the TFT).
+
+training:
+  epochs: 50
+  learning_rate: 0.001
+  batch_size: 128
+  hidden_size: 64
+  optimizer: adam
+  scheduler: cosine
+  seq_len: 96
+  horizon: 24
+
+benchmark:
+  mode: standard
+  datasets:
+    - synthetic-sine
+    - synthetic-multivar
+    - synthetic-load
+  runs: 1
+
+scaling:
+  timeout: 600
+  epochs: 20
+  fixed_batch_size: 128
+  fixed_num_samples: 4096
+  dataset_sizes: [512, 1024, 2048, 4096, 8192]
+  batch_sizes: [16, 32, 64, 128, 256, 512]
+  hidden_sizes: [32, 64, 128, 256]
+  num_hidden_layers: [1, 2, 3]
+
+implementations:
+  - name: "LSTM PyTorch (CPU)"
+    cmd: "{python} src/python/models/rnn/lstm_pytorch.py --dataset {dataset} --device cpu"
+  - name: "LSTM PyTorch (CUDA)"
+    cmd: "{python} src/python/models/rnn/lstm_pytorch.py --dataset {dataset} --device cuda"
+  - name: "GRU PyTorch (CPU)"
+    cmd: "{python} src/python/models/rnn/gru_pytorch.py --dataset {dataset} --device cpu"
+  - name: "GRU PyTorch (CUDA)"
+    cmd: "{python} src/python/models/rnn/gru_pytorch.py --dataset {dataset} --device cuda"
+  - name: "TCN PyTorch (CPU)"
+    cmd: "{python} src/python/models/tcn/tcn_pytorch.py --dataset {dataset} --device cpu"
+  - name: "TCN PyTorch (CUDA)"
+    cmd: "{python} src/python/models/tcn/tcn_pytorch.py --dataset {dataset} --device cuda"
+  - name: "Transformer PyTorch (CPU)"
+    cmd: "{python} src/python/models/transformer/transformer_pytorch.py --dataset {dataset} --device cpu"
+  - name: "Transformer PyTorch (CUDA)"
+    cmd: "{python} src/python/models/transformer/transformer_pytorch.py --dataset {dataset} --device cuda"
+  - name: "TFT PyTorch (CPU)"
+    cmd: "{python} src/python/models/tft/tft_pytorch.py --dataset {dataset} --device cpu"
+  - name: "TFT PyTorch (CUDA)"
+    cmd: "{python} src/python/models/tft/tft_pytorch.py --dataset {dataset} --device cuda"
+  - name: "Autoencoder PyTorch (CPU)"
+    cmd: "{python} src/python/models/autoencoder/autoencoder_pytorch.py --dataset {dataset} --device cpu --seq-len 48 --horizon 1"
+  - name: "Autoencoder PyTorch (CUDA)"
+    cmd: "{python} src/python/models/autoencoder/autoencoder_pytorch.py --dataset {dataset} --device cuda --seq-len 48 --horizon 1"
+  - name: "HMM NumPy"
+    cmd: "{python} src/python/models/hmm/hmm_numpy.py --dataset {dataset}"

@@ -1,4 +1,6 @@
 numpy
 matplotlib
 scikit-learn
-torch  # optional, for PyTorch implementation
+torch  # optional, for PyTorch and Temporal Fusion Transformer
+pyyaml
+tqdm

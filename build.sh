@@ -109,7 +109,7 @@ if $HAS_CMAKE && $HAS_GCC; then
     cd "$PROJECT_ROOT/src/c/build_cpu"
     cmake .. -DUSE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release > /dev/null 2>&1
     make -j"$(nproc)" 2>&1 | tail -3
-    ok "C (CPU) — src/c/build_cpu/main, src/c/build_cpu/cnn_main"
+    ok "C (CPU) — src/c/build_cpu/main, src/c/build_cpu/cnn_main, src/c/build_cpu/regression_main"
     built+=("C (CPU)")
 
     # CUDA build
@@ -139,8 +139,8 @@ if $HAS_CARGO; then
     cd "$PROJECT_ROOT/src/rust"
 
     # Always build CPU crates
-    cargo build --release -p mlp-cpu -p cnn-cpu 2>&1 | tail -5
-    ok "Rust (CPU) — mlp-cpu, cnn-cpu"
+    cargo build --release -p mlp-cpu -p cnn-cpu -p regression-cpu 2>&1 | tail -5
+    ok "Rust (CPU) — mlp-cpu, cnn-cpu, regression-cpu"
     built+=("Rust (CPU)")
 
     # GPU crates only if CUDA available
@@ -182,4 +182,6 @@ echo ""
 info "Run benchmarks with:"
 echo "  $PYTHON src/scripts/benchmark.py --mode scaling --runs 1"
 echo "  $PYTHON src/scripts/benchmark.py --mode scaling --model cnn --runs 1"
+echo "  $PYTHON src/scripts/extras_benchmark.py --family regression"
+echo "  $PYTHON src/scripts/extras_benchmark.py --family sequence"
 echo ""

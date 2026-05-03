@@ -23,6 +23,7 @@ set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} --use_fast_math")
 add_subdirectory(utils)
 add_subdirectory(models/mlp)
 add_subdirectory(models/cnn)
+add_subdirectory(models/regression)
 
 # MLP executable
 add_executable(main main.c $<TARGET_OBJECTS:data_loader>)
@@ -33,6 +34,11 @@ target_include_directories(main PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURR
 add_executable(cnn_main cnn_main.c $<TARGET_OBJECTS:data_loader>)
 target_link_libraries(cnn_main PRIVATE cnn nn_ops m)
 target_include_directories(cnn_main PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/utils)
+
+# Regression executable (self-contained, generates synthetic data)
+add_executable(regression_main regression_main.c)
+target_link_libraries(regression_main PRIVATE regression m)
+target_include_directories(regression_main PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(USE_CUDA)
     message(STATUS "Building with CUDA support")

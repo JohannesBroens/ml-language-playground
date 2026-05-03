@@ -550,3 +550,309 @@ Each sample requires temporary buffers for im2col and intermediate activations:
 | $O_H, O_W$ | Output spatial dimensions |
 | $s$ | Convolution stride |
 | $p$ | Pooling window size |
+
+---
+
+# Extended Model Families
+
+The sections below cover the additional model families added on top of the original MLP/CNN core.
+
+## Linear, Ridge, and Lasso Regression
+
+For inputs $X \in \mathbb{R}^{n \times d}$ and targets $y \in \mathbb{R}^n$, augment $X$ with a column of ones to absorb the intercept:
+
+```math
+\tilde{X} = [X \ |\ \mathbf{1}], \quad \tilde{w} = [w; b]
+```
+
+### Ordinary Least Squares (OLS)
+
+Minimise the residual sum of squares:
+
+```math
+\min_{\tilde{w}} \tfrac{1}{2} \| y - \tilde{X}\tilde{w} \|_2^2
+```
+
+Setting the gradient to zero yields the normal equations $\tilde{X}^\top \tilde{X}\, \tilde{w} = \tilde{X}^\top y$, solved by Cholesky factorisation $\tilde{X}^\top \tilde{X} = L L^\top$ followed by forward-then-back substitution.
+
+### Ridge
+
+Add an L2 penalty on the weights (but not the bias):
+
+```math
+\min_{w, b} \tfrac{1}{2} \| y - X w - b \mathbf{1} \|_2^2 + \tfrac{\lambda}{2} \| w \|_2^2
+```
+
+The same Cholesky solve applies after adding $\lambda I$ to the leading $d \times d$ block of $\tilde{X}^\top \tilde{X}$.
+
+### Lasso
+
+Replace the L2 penalty with L1:
+
+```math
+\min_w \tfrac{1}{2n} \| y - X w - b \|_2^2 + \lambda \| w \|_1
+```
+
+Solved by **cyclic coordinate descent**. For coordinate $j$ define $\rho_j = \frac{1}{n} \mathbf{x}_j^\top (r + \mathbf{x}_j w_j)$ where $r$ is the current residual. The closed-form coordinate update is the **soft-thresholding** operator:
+
+```math
+w_j \leftarrow \frac{1}{\| \mathbf{x}_j \|^2 / n} \, S(\rho_j, \lambda), \quad S(z, \lambda) = \mathrm{sign}(z) \max(|z| - \lambda, 0)
+```
+
+The bias is updated to the mean of the residual at the end of each pass.
+
+## Quantile Regression
+
+For quantile $\tau \in (0, 1)$, the **pinball loss** is
+
+```math
+\rho_\tau(u) = u(\tau - \mathbf{1}\{u < 0\}) = \begin{cases} \tau u & \text{if } u \ge 0, \\ (\tau - 1) u & \text{if } u < 0. \end{cases}
+```
+
+For predictions $\hat y_i = w^\top x_i + b$ and residuals $u_i = y_i - \hat y_i$, the (sub)gradient with respect to $\hat y_i$ is
+
+```math
+\frac{\partial \rho_\tau(u_i)}{\partial \hat y_i} = \mathbf{1}\{\hat y_i > y_i\} - \tau,
+```
+
+which is $1 - \tau$ when over-predicting and $-\tau$ when under-predicting. Several quantiles can be trained simultaneously by stacking weight vectors and using the corresponding $\tau$ vector in the gradient.
+
+## CART Regression Tree
+
+Build a binary tree by greedy minimisation of the **weighted squared-error** at each split. For a node containing samples with weights $w_i$ and targets $y_i$, the within-node SSE is
+
+```math
+\mathrm{SSE} = \sum_i w_i y_i^2 - \frac{(\sum_i w_i y_i)^2}{\sum_i w_i}.
+```
+
+A split on feature $j$ at threshold $t$ partitions the samples into left and right child sets and produces SSE-reduction $\Delta = \mathrm{SSE}_\text{parent} - \mathrm{SSE}_L - \mathrm{SSE}_R$. The best split maximises $\Delta$. Cumulative-sum tricks make the search $O(n \log n)$ per feature.
+
+## Random Forest
+
+Fit $T$ trees on bootstrap samples of the training data; at each split consider only a random subset (e.g. $\sqrt{d}$) of the features. Predictions are averaged across the ensemble:
+
+```math
+\hat y(x) = \frac{1}{T} \sum_{t=1}^T f_t(x).
+```
+
+The decorrelation between trees, induced by both bagging and feature subsampling, reduces ensemble variance without increasing bias.
+
+## Gradient Boosted Trees
+
+Build a sequence of trees $f_1, f_2, \dots, f_T$ that progressively reduce the loss:
+
+```math
+F_m(x) = F_{m-1}(x) + \eta f_m(x).
+```
+
+Each tree fits the negative gradient of the loss with respect to the current prediction:
+
+- **Squared error**: $-\partial L / \partial F = y - F$, so $f_m$ fits the current residual.
+- **Pinball loss** for quantile $\tau$: $-\partial L / \partial F = \mathbf{1}\{y > F\} \tau - \mathbf{1}\{y \le F\}(1 - \tau)$, which is $\tau$ when under-predicting and $\tau - 1$ when over-predicting.
+
+Stochastic boosting samples a fraction `subsample` of the data for each tree; together with shrinkage (`learning_rate` $< 1$) this is the most reliable way to reduce overfitting in deep boosted ensembles.
+
+## Gaussian Process Regression
+
+For a kernel $k(\cdot, \cdot)$ (here the squared-exponential plus white noise) and training data $(X, y)$, define $K = k(X, X) + \sigma_n^2 I$. The posterior at test points $X_*$ is Gaussian with
+
+```math
+\begin{aligned}
+\mathbf{m}_* &= k(X_*, X) K^{-1} y, \\
+\Sigma_*    &= k(X_*, X_*) - k(X_*, X) K^{-1} k(X, X_*).
+\end{aligned}
+```
+
+Stable computation factorises $K = L L^\top$ via Cholesky, computes $\alpha = L^{-\top}(L^{-1} y)$, and predicts $\mathbf{m}_* = k(X_*, X) \alpha$. The variance uses $\mathbf{v} = L^{-1} k(X, X_*)$ so $\sigma^2_* = k(x_*, x_*) - \mathbf{v}^\top \mathbf{v}$.
+
+Hyperparameters $\theta = (\ell, \sigma_f, \sigma_n)$ are fit by maximising the **log marginal likelihood**
+
+```math
+\log p(y \mid X, \theta) = -\tfrac{1}{2} y^\top \alpha - \sum_i \log L_{ii} - \tfrac{n}{2} \log(2\pi).
+```
+
+## Hidden Markov Model (Gaussian emissions)
+
+Hidden states $z_t \in \{1, \dots, K\}$, observations $x_t \in \mathbb{R}$, parameters $\theta = (\pi, T, \mu, \sigma)$ where $T_{ij} = P(z_{t+1} = j \mid z_t = i)$ and emissions are $\mathcal{N}(\mu_k, \sigma_k^2)$.
+
+### Forward / backward in log-space
+
+```math
+\log \alpha_t(k) = \log p(x_t \mid z_t = k) + \log \sum_j \exp(\log \alpha_{t-1}(j) + \log T_{jk}).
+```
+
+Both directions are computed with log-sum-exp for numerical stability.
+
+### Baum–Welch (EM)
+
+E-step: posteriors $\gamma_t(k) \propto \alpha_t(k) \beta_t(k)$ and pairwise $\xi_t(i, j) \propto \alpha_t(i) T_{ij} p(x_{t+1} \mid j) \beta_{t+1}(j)$.
+
+M-step:
+
+```math
+\pi_k = \gamma_1(k), \quad T_{ij} = \frac{\sum_t \xi_t(i, j)}{\sum_{j'} \sum_t \xi_t(i, j')}, \quad \mu_k = \frac{\sum_t \gamma_t(k) x_t}{\sum_t \gamma_t(k)}, \quad \sigma_k^2 = \frac{\sum_t \gamma_t(k) (x_t - \mu_k)^2}{\sum_t \gamma_t(k)}.
+```
+
+### Viterbi decoding
+
+Replace the inner sum in the forward pass with a max to obtain the most likely state sequence.
+
+## LSTM and GRU
+
+### LSTM cell
+
+```math
+\begin{aligned}
+i_t &= \sigma(W_i x_t + U_i h_{t-1} + b_i) \\
+f_t &= \sigma(W_f x_t + U_f h_{t-1} + b_f) \\
+o_t &= \sigma(W_o x_t + U_o h_{t-1} + b_o) \\
+\tilde c_t &= \tanh(W_c x_t + U_c h_{t-1} + b_c) \\
+c_t &= f_t \odot c_{t-1} + i_t \odot \tilde c_t \\
+h_t &= o_t \odot \tanh(c_t)
+\end{aligned}
+```
+
+### GRU cell
+
+```math
+\begin{aligned}
+r_t &= \sigma(W_r x_t + U_r h_{t-1} + b_r) \\
+z_t &= \sigma(W_z x_t + U_z h_{t-1} + b_z) \\
+\tilde h_t &= \tanh(W_h x_t + U_h (r_t \odot h_{t-1}) + b_h) \\
+h_t &= (1 - z_t) \odot h_{t-1} + z_t \odot \tilde h_t
+\end{aligned}
+```
+
+The GRU collapses the input/forget split into a single update gate $z_t$ and merges the cell state with the hidden state, saving roughly 25% of the LSTM's parameters.
+
+## Temporal Convolutional Network (TCN)
+
+A causal dilated 1D convolution applies the kernel only to past timesteps:
+
+```math
+y_t = \sum_{k=0}^{K-1} W_k\, x_{t - d \cdot k},
+```
+
+where $d$ is the dilation factor and the input is left-padded with $(K - 1) d$ zeros. Stacking $L$ blocks with dilations $1, 2, 4, \dots, 2^{L-1}$ gives an exponential receptive field
+
+```math
+r = 1 + 2 (K - 1) (2^L - 1).
+```
+
+Each TCN block in the implementation contains two such convolutions, each followed by LayerNorm, ReLU, and dropout, with a residual connection projecting the input channels to the output channels via a $1 \times 1$ convolution when needed.
+
+## Multi-Head Self-Attention
+
+For queries $Q$, keys $K$, and values $V$ in $\mathbb{R}^{T \times d_\text{head}}$,
+
+```math
+\mathrm{Attn}(Q, K, V) = \mathrm{softmax}\!\left(\frac{Q K^\top}{\sqrt{d_\text{head}}}\right) V.
+```
+
+In multi-head attention the model projects $Q, K, V$ into $H$ separate heads, runs the attention per head, and concatenates the outputs through a final linear projection. A causal mask sets the lower-triangular complement to $-\infty$ so position $i$ cannot attend to $j > i$.
+
+## Temporal Fusion Transformer
+
+Three core building blocks plus four assembled stages.
+
+### Gated Linear Unit (GLU)
+
+```math
+\mathrm{GLU}(x) = (W x + b) \odot \sigma(V x + c).
+```
+
+### Gated Residual Network (GRN)
+
+With optional context $c$,
+
+```math
+\begin{aligned}
+\eta_2 &= \mathrm{ELU}(W_1 x + W_2 c + b_1) \\
+\eta_1 &= W_3 \eta_2 + b_2 \\
+\mathrm{GRN}(x, c) &= \mathrm{LayerNorm}(\mathrm{skip}(x) + \mathrm{GLU}(\mathrm{Dropout}(\eta_1))).
+\end{aligned}
+```
+
+The skip connection projects $x$ to the output dimension when needed.
+
+### Variable Selection Network (VSN)
+
+For input variables $x^{(1)}, \dots, x^{(F)} \in \mathbb{R}$ at each timestep:
+
+1. Embed each variable independently: $e^{(j)} = \mathrm{GRN}_j(x^{(j)}) \in \mathbb{R}^d$.
+2. Compute selection logits over the flattened concatenation $[e^{(1)} \| \cdots \| e^{(F)}]$ via a context-aware GRN, then softmax to get weights $\alpha \in \Delta^{F-1}$.
+3. Output $\sum_j \alpha_j e^{(j)}$.
+
+The softmax weights $\alpha$ are interpretable as the model's per-timestep importance over inputs.
+
+### Static contexts
+
+A separate VSN encodes the static feature vector. Four GRNs map that single static embedding into four context vectors:
+
+```math
+c_\text{vs}, \ c_\text{e}, \ c_\text{h}, \ c_\text{c}
+```
+
+used for variable selection ($c_\text{vs}$), static enrichment ($c_\text{e}$), and the LSTM initial $(h_0, c_0)$ states.
+
+### Locality-aware seq2seq
+
+```math
+(\text{enc out}, h_T, c_T) = \mathrm{LSTM}_\text{enc}(\text{past embeddings},\ (c_\text{h}, c_\text{c})),\quad \text{dec out} = \mathrm{LSTM}_\text{dec}(\text{future embeddings},\ (h_T, c_T)).
+```
+
+The concatenated $[\text{enc out} \| \text{dec out}]$ is fused with the variable-selected embeddings via a GLU + residual + LayerNorm.
+
+### Static enrichment + interpretable attention
+
+```math
+\phi_t = \mathrm{GRN}(\text{lstm}_t,\ c_\text{e}), \quad \mathrm{Attn}_\text{interp}(\phi) = \mathrm{Out}\!\left(\frac{1}{H} \sum_{h} \mathrm{softmax}\!\left(\frac{Q_h K_h^\top}{\sqrt{d_\text{head}}}\right)\, V_\text{shared}\right).
+```
+
+Because all heads share the same value projection $V_\text{shared}$, the head-averaged attention weights are directly interpretable as importance per past timestep.
+
+### Position-wise feed-forward + quantile head
+
+A second GRN per timestep (gated and residual-summed), followed by a linear projection to $Q$ quantiles. Training minimises the mean pinball loss over horizon and quantiles.
+
+## Autoencoder
+
+A symmetric MLP encoder $f_\theta : \mathbb{R}^d \to \mathbb{R}^k$ and decoder $g_\phi : \mathbb{R}^k \to \mathbb{R}^d$ trained to minimise reconstruction error
+
+```math
+\mathcal{L}(\theta, \phi) = \tfrac{1}{n} \sum_i \| g_\phi(f_\theta(x_i)) - x_i \|_2^2.
+```
+
+Unusual inputs incur a larger reconstruction error; flagging the top quantile yields an unsupervised anomaly score.
+
+## K-Means and GMM
+
+### K-Means (Lloyd's algorithm with k-means++ init)
+
+Alternate **assign** ($z_i = \arg\min_k \| x_i - \mu_k \|_2^2$) and **update** ($\mu_k = \mathrm{mean}\{ x_i : z_i = k \}$) until centroids stop moving. The k-means++ initialisation seeds centres proportional to squared distance from the current set, which gives better convergence guarantees than uniform sampling.
+
+### Gaussian Mixture Model (EM, diagonal covariance)
+
+E-step computes responsibilities
+
+```math
+r_{ik} = \frac{\pi_k \mathcal{N}(x_i \mid \mu_k, \Sigma_k)}{\sum_{j} \pi_j \mathcal{N}(x_i \mid \mu_j, \Sigma_j)}.
+```
+
+M-step updates
+
+```math
+\pi_k = \frac{1}{n}\sum_i r_{ik}, \quad \mu_k = \frac{\sum_i r_{ik} x_i}{\sum_i r_{ik}}, \quad \Sigma_k = \frac{\sum_i r_{ik} (x_i - \mu_k)(x_i - \mu_k)^\top}{\sum_i r_{ik}}.
+```
+
+The implementation here uses a diagonal covariance for stability; the same EM framework extends straightforwardly to full or shared covariance.
+
+## PCA
+
+Centre $X$ and take the thin SVD
+
+```math
+X - \bar X = U \Sigma V^\top.
+```
+
+The first $k$ rows of $V^\top$ are the orthonormal principal components; $\Sigma_k^2 / \mathrm{tr}(\Sigma^2)$ gives the cumulative explained-variance ratio. Reconstruction is $\hat X = (X - \bar X) V_k^\top V_k + \bar X$, and reconstruction MSE is the standard reconstruction-quality metric.

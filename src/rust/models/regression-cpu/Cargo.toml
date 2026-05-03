@@ -1,0 +1,11 @@
+[package]
+name = "regression-cpu"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "regression-cpu"
+path = "src/main.rs"
+
+[dependencies]
+rayon = "1.10"

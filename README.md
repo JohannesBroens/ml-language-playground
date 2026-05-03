@@ -1,6 +1,21 @@
-# ML Language Playground: Multi-Language Neural Network Benchmark
+# ML Language Playground: Multi-Language ML Benchmark
 
-A multi-language machine learning benchmark comparing neural network implementations across C, Rust, and Python. Two model families --- MLP (8 implementations) and CNN/LeNet-5 (10 implementations) --- span CPU and GPU backends to measure throughput scaling.
+A multi-language machine learning benchmark comparing implementations across C, Rust, and Python. Originally built around two neural network families — MLP and CNN/LeNet-5 — the library has been extended into a broader algorithm zoo covering regression, tree ensembles, sequence forecasting, probabilistic models, and unsupervised learning.
+
+## Model Catalogue
+
+| Family | Models | Languages |
+|---|---|---|
+| **Classification (NN)** | MLP (1–5 hidden layers), CNN/LeNet-5 | C (CPU+CUDA), Rust (CPU+cuBLAS+CUDA-kernels), NumPy, PyTorch |
+| **Regression (linear)** | OLS, Ridge, Lasso, Quantile Regression | C (CPU), Rust (CPU), NumPy, PyTorch |
+| **Tree ensembles** | CART, Random Forest, Gradient Boosted Trees | NumPy |
+| **Sequence forecasting** | LSTM, GRU, 1D TCN, Transformer encoder, **Temporal Fusion Transformer** | PyTorch |
+| **Probabilistic** | Gaussian Process, Hidden Markov Model | NumPy |
+| **Unsupervised** | Autoencoder, K-Means, Gaussian Mixture, PCA | PyTorch (autoencoder), NumPy |
+
+All implementations emit a standardised output block (`Test Loss / Test Accuracy / Train time / Eval time / Throughput`) so the benchmark runners can parse them uniformly.
+
+---
 
 ## MLP Architecture
 
@@ -14,65 +29,227 @@ A multi-language machine learning benchmark comparing neural network implementat
 | Optimizer | Mini-batch SGD or Adam (configurable) | SGD: simple baseline; Adam: adaptive per-parameter learning rates |
 | Scheduler | None or cosine annealing with warmup | Optional cosine decay (5% linear warmup, decay to lr_min=1e-6) |
 
-## Implementations
+### MLP Implementations
 
 | Implementation | File | Description |
 |---------------|------|-------------|
-| C (CPU) | `src/c/models/mlp/mlp_cpu.c` | Manual backprop in C99 with OpenMP parallelization and cache-tiled GEMM |
+| C (CPU) | `src/c/models/mlp/mlp_cpu.c` | Manual backprop in C99 with OpenMP and cache-tiled GEMM |
 | C (CUDA) | `src/c/models/mlp/mlp.cu` | GPU kernels with cuBLAS GEMM and custom elementwise CUDA kernels |
-| Rust (CPU) | `src/rust/models/mlp-cpu/src/main.rs` | Rayon threadpool (physical cores) + cache-tiled GEMM (TILE=64) |
-| Rust (cuBLAS) | `src/rust/models/mlp-cuda-cublas/src/main.rs` | cuBLAS FFI for GEMM + custom CUDA kernels for elementwise ops |
+| Rust (CPU) | `src/rust/models/mlp-cpu/src/main.rs` | Rayon threadpool + cache-tiled GEMM (TILE=64) |
+| Rust (cuBLAS) | `src/rust/models/mlp-cuda-cublas/src/main.rs` | cuBLAS FFI for GEMM + custom CUDA kernels |
 | Rust (CUDA Kernels) | `src/rust/models/mlp-cuda-kernels/src/main.rs` | All custom CUDA kernels including shared-memory tiled matmul |
-| NumPy (CPU) | `src/python/models/mlp/mlp_numpy.py` | Vectorized NumPy, exact replica of C algorithm |
-| PyTorch (CPU) | `src/python/models/mlp/mlp_pytorch.py` | nn.Module with manual Xavier init to match C, CPU backend |
-| PyTorch (CUDA) | `src/python/models/mlp/mlp_pytorch.py` | Same PyTorch model on GPU via `--device cuda` |
-
-All 8 MLP implementations produce identical standardized output for benchmark parsing, including throughput in samples/s.
+| NumPy (CPU) | `src/python/models/mlp/mlp_numpy.py` | Vectorised NumPy, exact replica of the C algorithm |
+| PyTorch (CPU/CUDA) | `src/python/models/mlp/mlp_pytorch.py` | `nn.Module` with manual Xavier init |
 
 ## CNN Architecture (LeNet-5)
 
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
-| Conv1 | 1->6 channels, 5x5 kernel | Classic LeNet-5 first layer for edge/texture detection |
-| Conv2 | 6->16 channels, 5x5 kernel | Learns higher-level feature combinations |
-| Pooling | 2x2 average pooling (stride 2) | Spatial downsampling, matches original LeNet-5 |
-| Convolution method | im2col + GEMM | Converts convolution to matrix multiply, reuses optimized tiled GEMM |
-| FC layers | 256->120->84->10 | Standard LeNet-5 classifier (16x4x4 = 256 after two pool layers) |
-| Activations | ReLU (all layers) | Modern replacement for LeNet-5's original sigmoid/tanh |
-| Output | Softmax + Cross-entropy | Same as MLP for consistent loss computation |
-| Initialization | Xavier uniform | Same sqrt(2/fan_in) scale as MLP, adapted for conv fan_in = C_in x kH x kW |
-| Optimizer | Mini-batch SGD or Adam | Same optimizer support as MLP |
-| Scheduler | None or cosine annealing | Same scheduler support as MLP |
+| Conv1 | 1→6 channels, 5×5 kernel | Classic LeNet-5 first layer for edge/texture detection |
+| Conv2 | 6→16 channels, 5×5 kernel | Higher-level feature combinations |
+| Pooling | 2×2 average pooling (stride 2) | Spatial downsampling, matches LeNet-5 |
+| Convolution method | im2col + GEMM | Reuses optimised tiled GEMM |
+| FC layers | 256→120→84→10 | LeNet-5 classifier |
+| Activations | ReLU (modernised replacement for sigmoid/tanh) | |
+| Output | Softmax + Cross-entropy | |
 
 ### CNN Implementations
 
-| Implementation | File | Description |
-|---------------|------|-------------|
-| C (CPU) | `src/c/models/cnn/cnn_cpu.c` | im2col + OpenMP-parallelized tiled GEMM, shared nn_ops library |
-| C (CUDA) | `src/c/models/cnn/cnn.cu` | GPU im2col + cuBLAS GEMM, custom elementwise CUDA kernels |
-| C (cuDNN) | `src/c/models/cnn/cnn.cu` | cuDNN convolution backend via `--backend cudnn` |
-| Rust (CPU) | `src/rust/models/cnn-cpu/src/main.rs` | im2col + Rayon threadpool with cache-tiled GEMM (TILE=64) |
-| Rust (cuBLAS) | `src/rust/models/cnn-cuda-cublas/src/main.rs` | cuBLAS GEMM + custom CUDA kernels for conv/pool/activations |
-| Rust (CUDA Kernels) | `src/rust/models/cnn-cuda-kernels/src/main.rs` | All custom CUDA kernels including shared-memory tiled matmul |
-| Rust cuBLAS (cuDNN) | `src/rust/models/cnn-cuda-cublas/src/main.rs` | cuDNN convolution backend via `--backend cudnn` |
-| Rust Kernels (cuDNN) | `src/rust/models/cnn-cuda-kernels/src/main.rs` | cuDNN convolution backend via `--backend cudnn` |
-| PyTorch (CPU) | `src/python/models/cnn/cnn_pytorch.py` | nn.Module with manual Xavier init, CPU backend |
-| PyTorch (CUDA) | `src/python/models/cnn/cnn_pytorch.py` | Same model on GPU via `--device cuda` |
+10 variants spanning the same C/Rust/PyTorch matrix as MLP, plus three cuDNN backends. See `src/c/models/cnn/`, `src/rust/models/cnn-*/`, and `src/python/models/cnn/`.
 
-NumPy is excluded from CNN benchmarks: pure-Python im2col is prohibitively slow (timeouts at 600s), unlike MLP where NumPy's BLAS backend makes it a competitive CPU baseline.
+---
 
-All CNN implementations train on MNIST (60K training / 10K test, 28x28 grayscale digits, 10 classes).
+## Regression Models
+
+A regression family built around linear models, tree ensembles, and a Gaussian Process. All accept the same dataset names and standardised CLI flags as the classification models, with `Test Accuracy` overloaded to a model-appropriate score: R² for point regressors, P10/P90 interval coverage for quantile/probabilistic models, explained-variance ratio for PCA, and cluster balance for K-means/GMM.
+
+### Linear / Ridge / Lasso
+
+| Implementation | File | Solver |
+|---|---|---|
+| C (CPU) | `src/c/models/regression/regression_cpu.c` | Cholesky on normal equations / coordinate descent for Lasso |
+| Rust (CPU) | `src/rust/models/regression-cpu/src/main.rs` | Same algorithms, parallel inner loops via Rayon |
+| NumPy | `src/python/models/regression/linear_numpy.py` | `np.linalg.solve` / coordinate descent |
+| PyTorch (CPU/CUDA) | `src/python/models/regression/linear_pytorch.py` | `torch.linalg.solve` / ISTA proximal gradient |
+
+```bash
+# OLS (no regularisation)
+python3 src/python/models/regression/linear_numpy.py --dataset synthetic-linear
+
+# Ridge with closed-form solve
+python3 src/python/models/regression/linear_numpy.py --dataset synthetic-linear --regularizer l2 --lambda-reg 0.5
+
+# Lasso with coordinate descent — recovers sparse coefficients
+python3 src/python/models/regression/linear_numpy.py --dataset synthetic-linear --regularizer l1 --lambda-reg 0.05
+
+# Same in C
+LD_LIBRARY_PATH=src/c/build_cpu:src/c/build_cpu/models/regression \
+    ./src/c/build_cpu/regression_main --regularizer l1 --lambda-reg 0.05
+
+# Same in Rust
+./src/rust/target/release/regression-cpu --regularizer l1 --lambda-reg 0.05
+```
+
+### Quantile Regression
+
+Independent linear models trained jointly with the pinball loss across multiple quantiles (P10/P50/P90 by default). Output is the full vector of quantile predictions, and the reported "accuracy" is the empirical coverage of the P10–P90 interval.
+
+```bash
+python3 src/python/models/regression/quantile_numpy.py --dataset synthetic-nonlinear --quantiles 0.1,0.5,0.9
+```
+
+### Tree Ensembles
+
+| Model | File | Notes |
+|---|---|---|
+| Decision Tree | `src/python/models/trees/decision_tree_numpy.py` | Pure-NumPy CART with weighted splits |
+| Random Forest | `src/python/models/trees/random_forest_numpy.py` | Bagging + per-split feature subsampling |
+| Gradient Boosted Trees | `src/python/models/trees/gbm_numpy.py` | Stochastic GBM, MSE or pinball loss |
+
+The tree primitive (`_tree_core.py`) is shared between Random Forest and GBT, so improvements to the splitter benefit both.
+
+```bash
+python3 src/python/models/trees/decision_tree_numpy.py --dataset synthetic-nonlinear --max-depth 8
+python3 src/python/models/trees/random_forest_numpy.py --dataset synthetic-nonlinear --n-estimators 50 --max-depth 10
+python3 src/python/models/trees/gbm_numpy.py --dataset synthetic-nonlinear --n-estimators 100 --max-depth 3 --learning-rate 0.05
+
+# Quantile-loss boosting for prediction intervals (P10 example)
+python3 src/python/models/trees/gbm_numpy.py --dataset synthetic-nonlinear --loss quantile --quantile 0.1
+```
+
+### Gaussian Process Regression
+
+RBF + white-noise kernel with hyperparameters fit by maximising the log marginal likelihood. The closed-form posterior gives both a mean prediction and a calibrated variance — the reported accuracy is the empirical 95% interval coverage.
+
+```bash
+python3 src/python/models/gp/gp_numpy.py --dataset synthetic-nonlinear --num-samples 512
+```
+
+GP scales as O(n³) in the number of training points, so training is internally capped at 1024 samples — appropriate for benchmarking, not for production.
+
+---
+
+## Sequence Models
+
+Five forecasting architectures with a shared input/output contract: the input is a `(batch, seq_len, num_features)` tensor and the output is a horizon vector of length `H` (or a `(B, H, Q)` cube of quantile predictions for the TFT). They train on synthetic multivariate datasets generated by `src/python/utils/data_utils.py::load_sequence_dataset`.
+
+### LSTM / GRU
+
+```bash
+python3 src/python/models/rnn/lstm_pytorch.py --dataset synthetic-multivar --device cpu
+python3 src/python/models/rnn/gru_pytorch.py  --dataset synthetic-multivar --device cuda
+```
+
+Both take the final hidden state of an encoder RNN and project it to a flat horizon vector. `--num-layers` and `--hidden-size` control capacity; the GRU uses ~25% fewer parameters than the equivalent LSTM.
+
+### 1D Temporal Convolutional Network
+
+Causal dilated 1D convolutions stacked into residual blocks. Receptive field grows exponentially in depth — for kernel size `k` and `L` blocks, the effective receptive field is `1 + 2(k-1)(2^L - 1)`.
+
+```bash
+python3 src/python/models/tcn/tcn_pytorch.py --dataset synthetic-multivar --num-blocks 4 --kernel-size 3
+```
+
+### Transformer Encoder
+
+Pre-norm encoder-only Transformer with sinusoidal positional encoding. Multi-head self-attention over the input window, mean pooling, then a linear head to the horizon.
+
+```bash
+python3 src/python/models/transformer/transformer_pytorch.py --dataset synthetic-multivar --d-model 64 --n-heads 4 --num-layers 2
+```
+
+### Temporal Fusion Transformer (TFT)
+
+A faithful implementation of Lim et al.'s TFT, with all the original architectural components:
+
+- **Variable Selection Networks (VSN)** — a per-feature Gated Residual Network produces a hidden embedding for each input variable, and a second GRN over the concatenated embeddings produces a softmax weight per variable. The output is a weighted sum, and the weights are interpretable as variable importances.
+- **Static covariate encoders** — four separate GRNs map a static feature vector into four context vectors that condition variable selection (`c_vs`), static enrichment (`c_e`), and the LSTM initial hidden/cell states (`c_h`, `c_c`).
+- **Locality-aware sequence layer** — an LSTM encoder runs over the past window, and an LSTM decoder runs over the known-future window, both initialised from the static contexts. Outputs are gated and residual-summed with the variable-selected embeddings.
+- **Static enrichment GRN** — broadcasts `c_e` across the time axis to inject static information into every timestep before attention.
+- **Interpretable multi-head attention** — multi-head queries and keys with a single shared value projection. This makes head-averaged attention weights interpretable as importance per timestep.
+- **Position-wise feed-forward GRN + final gated residual** before output.
+- **Quantile output head** — a single linear projection to `Q` quantiles per horizon step. Trained with the pinball loss; reported metric is the empirical interval coverage.
+
+The synthetic datasets here don't ship with explicit static or known-future fields, so the TFT script auto-derives them: past = full window, future = non-target features (assumed forecastable), static = `(target_mean, target_std)` over the past window. Real deployments would replace those with actual forecasts and metadata.
+
+```bash
+python3 src/python/models/tft/tft_pytorch.py --dataset synthetic-load --device cuda \
+    --hidden-size 64 --n-heads 4 --quantiles 0.1,0.5,0.9 --epochs 50
+```
+
+#### Why TFT is in the library
+
+TFT combines four otherwise-separate ideas under one roof:
+
+- **Multi-horizon quantile output**, which gives prediction intervals for any timestep.
+- **Static covariate handling**, which lets the model condition on slow-moving metadata.
+- **Variable selection**, which acts as built-in feature importance and learned regularisation.
+- **Interpretable attention**, which surfaces which historical timesteps drove a given prediction.
+
+Each of those is useful on its own; the TFT implementation here demonstrates all four working together on the same model graph.
+
+---
+
+## Probabilistic / Unsupervised
+
+| Model | File | Notes |
+|---|---|---|
+| HMM | `src/python/models/hmm/hmm_numpy.py` | Gaussian emissions, Baum–Welch training, Viterbi decoding |
+| Autoencoder | `src/python/models/autoencoder/autoencoder_pytorch.py` | Symmetric MLP autoencoder for sequence-window reconstruction |
+| K-Means | `src/python/models/clustering/kmeans_numpy.py` | k-means++ initialisation |
+| GMM | `src/python/models/clustering/gmm_numpy.py` | Diagonal-covariance EM |
+| PCA | `src/python/models/pca/pca_numpy.py` | Thin SVD |
+
+```bash
+# Discrete regime detection on a regime-switching synthetic series
+python3 src/python/models/hmm/hmm_numpy.py --dataset synthetic-regime --num-states 2
+
+# Anomaly detection via reconstruction error
+python3 src/python/models/autoencoder/autoencoder_pytorch.py --dataset synthetic-load
+
+# Clustering and dimensionality reduction
+python3 src/python/models/clustering/kmeans_numpy.py --dataset synthetic-nonlinear --num-clusters 4
+python3 src/python/models/clustering/gmm_numpy.py    --dataset synthetic-nonlinear --num-clusters 4
+python3 src/python/models/pca/pca_numpy.py           --dataset synthetic-linear --num-components 4
+```
+
+---
 
 ## Datasets
 
+### Classification
+
 | Name | Samples | Features | Classes | Source |
 |------|---------|----------|---------|--------|
-| `generated` | Configurable (default 1000) | 2 | 2 | Synthetic 2D circle classification |
+| `generated` | configurable (default 1000) | 2 | 2 | Synthetic 2D circle |
 | `iris` | 150 | 4 | 3 | UCI Iris |
 | `wine-red` | 1599 | 11 | 11 | UCI Wine Quality (red) |
 | `wine-white` | 4898 | 11 | 11 | UCI Wine Quality (white) |
-| `breast-cancer` | 569 | 30 | 2 | Wisconsin Diagnostic Breast Cancer |
-| `mnist` | 70,000 | 784 (28x28) | 10 | Handwritten digits (CNN only) |
+| `breast-cancer` | 569 | 30 | 2 | Wisconsin Diagnostic |
+| `mnist` | 70,000 | 784 (28×28) | 10 | Handwritten digits |
+
+### Regression
+
+| Name | Samples | Features | Notes |
+|------|---------|----------|-------|
+| `synthetic-linear` | configurable (default 4096) | 20 (5 informative) | Sparse ground-truth coefficients — good Lasso target |
+| `synthetic-nonlinear` | configurable (default 4096) | 10 | Friedman-1 style; tree models and kernels beat linear |
+| `california-housing` | 20640 | 8 | UCI California housing prices |
+| `wine-quality-reg` | 1599 | 11 | Wine quality treated as continuous |
+| `concrete` | 1030 | 8 | UCI concrete compressive strength |
+
+### Sequence
+
+All sequence datasets are synthetic and generated on the fly. Each call returns `(num_windows, seq_len, num_features)` input tensors and `(num_windows, horizon)` targets.
+
+| Name | Channels | Description |
+|------|----------|-------------|
+| `synthetic-sine` | 1 | Single noisy sine wave |
+| `synthetic-multivar` | 4 | Daily/weekly seasonality + AR(1) target with three exogenous drivers |
+| `synthetic-regime` | 1 | Two-regime AR series with low-vol and high-vol-with-spikes states |
+| `synthetic-load` | 7 | Hourly demand-style curve: double-peak daily, weekday/weekend modulation, annual heating/cooling, AR component, plus calendar features (sin/cos hour-of-day, sin/cos day-of-week, weekend flag) |
+
+---
 
 ## Quick Start
 
@@ -81,124 +258,54 @@ All CNN implementations train on MNIST (60K training / 10K test, 28x28 grayscale
 - **C**: GCC (C99), CMake 3.10+, OpenMP
 - **CUDA**: NVIDIA CUDA Toolkit (for GPU implementations in C and Rust)
 - **Rust**: Cargo (2021 edition)
-- **Python**: Python 3.8+, NumPy, matplotlib, PyTorch
+- **Python**: Python 3.8+, NumPy, matplotlib, PyTorch, PyYAML, tqdm
 
-### Full Pipeline (Recommended)
-
-The `run.sh` wrapper handles build, tuning, benchmarking, scaling experiments, and plot generation with log rotation:
-
-```bash
-# Full pipeline for all models
-./run.sh
-
-# Single model only
-./run.sh --model mlp
-./run.sh --model cnn
-
-# Skip tuning (use cached tuned params)
-./run.sh --skip-tune
-```
-
-### Build Everything
+### Build everything
 
 ```bash
 ./build.sh
 ```
 
-This downloads datasets, installs Python dependencies, and builds all C, Rust, and CUDA targets. Targets whose toolchains are missing are skipped with a warning.
+Builds C (CPU + CUDA), Rust (CPU + cuBLAS + CUDA-kernels + regression-cpu), and installs Python dependencies. Targets whose toolchains are missing are skipped with a warning.
 
-### Pipeline Phases
-
-```bash
-# Full pipeline for all models (build -> tune -> benchmark -> plot)
-python3 src/scripts/pipeline.py all
-
-# Single model only
-python3 src/scripts/pipeline.py all --model mlp
-python3 src/scripts/pipeline.py all --model cnn
-
-# Individual phases
-python3 src/scripts/pipeline.py tune --model mlp      # Two-phase successive halving
-python3 src/scripts/pipeline.py benchmark --model cnn  # Run benchmarks with tuned params
-python3 src/scripts/pipeline.py plot --model mlp       # Regenerate plots from cache
-```
-
-Tuning uses two-phase successive halving: throughput sweep for batch size, then LR halving per optimizer track (SGD + Adam). Results are cached to `results/cache/tuning_{model}.yaml` and automatically loaded by the benchmark phase.
-
-### Run Individual Implementations
-
-All implementations accept `--batch-size`, `--num-samples`, `--hidden-size`, `--num-hidden-layers`, `--epochs`, `--optimizer sgd|adam`, and `--scheduler none|cosine` flags.
+### Run the original NN benchmark suite
 
 ```bash
-# C (CPU)
-./src/c/build_cpu/main --dataset iris
+# Full pipeline for MLP and CNN: build -> tune -> benchmark -> plot
+./run.sh
 
-# C (CUDA)
-./src/c/build_cuda/main --dataset iris
+# Single model
+./run.sh --model mlp
+./run.sh --model cnn
 
-# Rust (CPU)
-./src/rust/target/release/mlp-cpu --dataset iris
-
-# Rust (cuBLAS)
-./src/rust/target/release/mlp-cuda-cublas --dataset iris
-
-# Rust (CUDA Kernels)
-./src/rust/target/release/mlp-cuda-kernels --dataset iris
-
-# NumPy
-python3 src/python/models/mlp/mlp_numpy.py --dataset iris
-
-# PyTorch (CPU)
-python3 src/python/models/mlp/mlp_pytorch.py --dataset iris --device cpu
-
-# PyTorch (CUDA)
-python3 src/python/models/mlp/mlp_pytorch.py --dataset iris --device cuda
-
-# Multi-layer MLP example (3 hidden layers, 256 neurons each)
-./src/rust/target/release/mlp-cpu --dataset generated --num-hidden-layers 3 --hidden-size 256
-
-# --- CNN (LeNet-5 on MNIST) ---
-# C (CPU)
-./src/c/build_cpu/cnn_main --dataset mnist
-
-# Rust (CPU)
-./src/rust/target/release/cnn-cpu --dataset mnist
-
-# PyTorch (CUDA)
-python3 src/python/models/cnn/cnn_pytorch.py --dataset mnist --device cuda
+# Skip retuning if you already have cached params
+./run.sh --skip-tune
 ```
 
-### Run Benchmarks
+### Run the regression / sequence model suites
+
+The regression and sequence families don't fit cleanly into the GPU-throughput-scaling framework that powers `benchmark.py` (small models, different metrics, different hyperparameter axes), so they have their own driver:
 
 ```bash
-# MLP: standard mode — accuracy + train time on real datasets
-python3 src/scripts/benchmark.py --mode standard --datasets generated,iris,breast-cancer --runs 3
+# Comparison table across the regression family
+python3 src/scripts/extras_benchmark.py --family regression
 
-# MLP: scaling mode — throughput vs dataset size, batch size, hidden size, and network depth
-python3 src/scripts/benchmark.py --mode scaling --runs 1
+# Comparison table across the sequence family (LSTM, GRU, TCN, Transformer, TFT, ...)
+python3 src/scripts/extras_benchmark.py --family sequence
 
-# MLP: budget mode — accumulate benchmark samples with variance-weighted scheduling
-# Runs can be repeated; results accumulate in results/cache/benchmark_cache.json
-python3 src/scripts/benchmark.py --mode scaling --budget 60   # 60 minutes
-
-# Replot from cached data without running any benchmarks
-python3 src/scripts/benchmark.py --mode scaling --budget 0
-
-# CNN: scaling mode — throughput vs batch size on MNIST
-python3 src/scripts/benchmark.py --mode scaling --model cnn --runs 1
-
-# CNN: budget mode — accumulate samples (results merge with cache)
-python3 src/scripts/benchmark.py --mode scaling --model cnn --budget 30 --scaling-epochs 20
-
-# Replot CNN from cache
-python3 src/scripts/benchmark.py --mode scaling --model cnn --budget 0
+# Both
+python3 src/scripts/extras_benchmark.py --family all
 ```
+
+The driver reads `configs/models/regression.yaml` and `configs/models/sequence.yaml`, runs each implementation that's available locally, parses the standardised output, and emits a markdown comparison table.
+
+---
 
 ## MLP Scaling Benchmark Analysis
 
-All measurements were collected on an NVIDIA RTX 3070 (46 SMs, 5888 CUDA cores, 8 GB GDDR6) paired with an Intel Core i9-10900F (10 cores, 20 threads, 2.80 GHz). The benchmark sweeps four independent axes --- dataset size, mini-batch size, hidden-layer width, and network depth --- while holding the others fixed. Each configuration trains the full MLP for 10 epochs and reports end-to-end throughput in samples per second.
+> The neural-network scaling analysis below is unchanged from the original benchmark; the new model families are characterised in their own runners (`extras_benchmark.py`) since their compute profiles don't share the GPU-saturating GEMM-heavy workload that the MLP/CNN scaling story is built around.
 
-Throughput curves are fitted using Gaussian Process regression in log-log space, with 95% confidence bands derived from the GP posterior. Data points are sampled from continuous log-uniform distributions (not a fixed grid) using a gap-filling strategy that ensures even coverage. Results accumulate across runs via `--budget`, and the variance-weighted scheduler prioritizes under-sampled regions. Run `python3 src/scripts/benchmark.py --mode scaling --budget 60` to extend the dataset, or `--budget 0` to replot from cache.
+All measurements were collected on an NVIDIA RTX 3070 (46 SMs, 5888 CUDA cores, 8 GB GDDR6) paired with an Intel Core i9-10900F (10 cores, 20 threads, 2.80 GHz). The benchmark sweeps four independent axes — dataset size, mini-batch size, hidden-layer width, and network depth — while holding the others fixed.
 
 ### Peak Throughput Summary
 
@@ -209,79 +316,38 @@ Throughput curves are fitted using Gaussian Process regression in log-log space,
 | Hidden Size | **9.70M** | 9.15M | 8.75M | 1.80M | 5.96M | 1.58M | 3.89M | 3.21M |
 | Network Depth | **6.92M** | 6.69M | 5.76M | 1.83M | 2.13M | 1.51M | 1.64M | 1.39M |
 
----
+Plots and the full scaling discussion remain in [`results/plots/mlp/`](results/plots/mlp/) and the section below.
 
-### Dataset Size Scaling (8K -- 4M samples)
+### Dataset Size Scaling (8K – 4M samples)
 
-Fixed parameters: batch\_size = 2048, hidden\_size = 256, epochs = 10.
+Fixed parameters: `batch_size = 2048`, `hidden_size = 256`, `epochs = 10`.
 
 ![Throughput vs Dataset Size](results/plots/mlp/scaling_dataset_size.png)
 
-The dataset-size sweep shows that GPU throughput rises with dataset size and plateaus once there are enough mini-batches to amortize kernel launch overhead. C CUDA and Rust cuBLAS lead at ~9M samples/s at large dataset sizes, with Rust CUDA Kernels at ~5M and PyTorch CUDA around ~3.3M. The CPU implementations cluster between 700K and 1.3M samples/s, with C (CPU) and PyTorch (CPU) at the top of the CPU tier.
-
-This scaling behavior is expected: with a fixed batch size of 2048, each mini-batch GEMM has the same dimensions regardless of total samples. More data simply means more mini-batches per epoch, and throughput (samples per second) stays constant once the GPU pipeline is saturated.
+The dataset-size sweep shows GPU throughput rising and plateauing once enough mini-batches amortise kernel-launch overhead. C CUDA and Rust cuBLAS lead at ~9M samples/s, with the custom-kernel build at ~5M and PyTorch CUDA around ~3.3M. CPU implementations cluster between 700K and 1.3M samples/s.
 
 ![GPU Speedup vs Dataset Size](results/plots/mlp/gpu_speedup_dataset_size.png)
 
-The GPU speedup plot shows a roughly constant 5--10x ratio across dataset sizes, confirming that the GPU advantage comes from faster per-batch computation, not from better amortization. The Rust cuBLAS / C CUDA ratio (orange) hovers near 1.0x throughout, confirming zero overhead from Rust's FFI bindings.
-
----
-
-### Batch Size Scaling (256 -- 16K)
-
-Fixed parameters: num\_samples = 262,144, hidden\_size = 256, epochs = 10.
+### Batch Size Scaling (256 – 16K)
 
 ![Throughput vs Batch Size](results/plots/mlp/scaling_batch_size.png)
-
-Batch size is the primary lever for GPU utilization because it determines how many threads can execute in parallel during a single GEMM call. The RTX 3070 has 46 streaming multiprocessors, each capable of scheduling up to 2048 threads, for a total of approximately 94K concurrent threads at full occupancy.
-
-The GPU throughput curves rise steeply from batch size 256 through 16K, with C CUDA and Rust cuBLAS neck-and-neck at ~7.2M samples/s at the largest batch sizes. The custom CUDA kernel implementation (Rust CUDA Kernels) reaches ~4.8M samples/s --- its shared-memory tiled matmul (TILE\_DIM=16) is less optimized than cuBLAS's auto-tuned kernels but still benefits cleanly from increased parallelism. PyTorch CUDA reaches ~2.8M, with its Python dispatch and autograd overhead consuming a larger share at these matrix dimensions.
-
-The CPU implementations show flatter scaling. Beyond batch sizes of 1024--2048, throughput plateaus as the per-batch matrices begin to exceed L3 cache capacity, causing the tiled GEMM to spill to main memory.
-
 ![GPU Speedup vs Batch Size](results/plots/mlp/gpu_speedup_batch_size.png)
 
-The batch-size speedup plot illustrates a textbook GPU scaling curve. At batch size 256, GPU speedup ranges from 2--5x. By the largest batch sizes, the ratios reach 10--15x. This monotonic increase demonstrates that GPUs need large amounts of data-parallel work to justify kernel launch and memory transfer overhead.
+GPU throughput rises monotonically with batch size, reflecting how SM occupancy grows with available data-parallel work.
 
----
-
-### Hidden Size Scaling (64 -- 8K)
-
-Fixed parameters: num\_samples = 262,144, batch\_size = 2048, epochs = 10.
+### Hidden Size Scaling (64 – 8K)
 
 ![Throughput vs Hidden Size](results/plots/mlp/scaling_hidden_size.png)
-
-The hidden-size sweep is the most revealing experiment because it directly controls the arithmetic intensity of the workload. The dominant GEMM operations have dimensions (batch x hidden) and (hidden x hidden), so FLOPs per sample scale as O(hidden^2). This makes hidden-size scaling the clearest test of compute-bound versus memory-bound behavior.
-
-At small hidden sizes (~64), all implementations cluster between 1M and 10M samples/s. The CPU implementations are competitive because the tiny weight matrices fit entirely in L1/L2 cache --- this is the memory-bound regime where the GPU's massive compute throughput goes largely unused.
-
-As hidden size increases to 256 and beyond, the GPU implementations pull away. C CUDA peaks at 9.7M samples/s and Rust cuBLAS at 9.2M, while the custom Rust CUDA kernels reach 8.75M --- impressive for hand-written shared-memory kernels. The CPU implementations suffer severely at large hidden sizes: large weight matrices exceed cache capacity, and the O(hidden^2) compute ensures that even OpenMP parallelism cannot compensate. All CPU implementations converge to similar low throughput at the largest hidden sizes.
-
 ![GPU Speedup vs Hidden Size](results/plots/mlp/gpu_speedup_hidden_size.png)
 
-The hidden-size speedup plot shows the most dramatic GPU advantage of any experiment. At small hidden sizes, speedups are modest (1--2x). As hidden size grows, the speedup curves rise because the GPU's throughput degrades more slowly than the CPU's --- the GPU has enough on-chip SRAM (shared memory plus register file) to tile large matrix multiplies efficiently, while the CPU's cache hierarchy is overwhelmed.
+The clearest test of compute-bound vs memory-bound behaviour. CPU implementations suffer once weight matrices outgrow L3, while the GPU degrades gracefully thanks to its on-chip SRAM.
 
----
-
-### Network Depth Scaling (1 -- 5 hidden layers)
-
-Fixed parameters: num\_samples = 262,144, batch\_size = 2048, hidden\_size = 256, epochs = 10.
+### Network Depth Scaling (1 – 5 hidden layers)
 
 ![Throughput vs Network Depth](results/plots/mlp/scaling_num_hidden_layers.png)
-
-The depth sweep is a new scaling axis that tests how implementations handle the sequential overhead of deeper networks. Adding hidden layers increases the total compute linearly (each layer adds a (batch x hidden) x (hidden x hidden) GEMM in forward and two GEMMs in backward), but also adds sequential dependencies: layer N's activations depend on layer N-1, preventing pipelining across layers.
-
-The GPU implementations degrade gracefully with depth. C CUDA drops from ~7M samples/s at 1 layer to ~2.5M at 5 layers, and Rust cuBLAS tracks it closely. This roughly 3x degradation across 5x more layers reflects the inherent parallelism within each GEMM: even though layers are sequential, each individual matrix multiply fully saturates the GPU's SMs. Rust CUDA Kernels shows the same graceful degradation, landing at ~1.5M at 5 layers.
-
-The CPU implementations show steeper degradation. C (CPU) drops from ~2M to ~200K, and Rust (CPU) from ~1.4M to ~100K at 5 layers. The deeper network's working set (5 layers x 256x256 weights + activations) far exceeds L3 cache, so each layer's GEMM pays full main-memory latency. NumPy (using OpenBLAS) holds up better than the hand-tuned CPU implementations at depth --- its optimized BLAS kernels handle the increased memory pressure more efficiently.
-
-The depth experiment reveals a key architectural insight: GPU advantage grows with network depth because each additional layer adds fixed overhead on the CPU (cache thrashing, thread scheduling) while the GPU absorbs it with minimal penalty (kernel launches are ~5us each, negligible compared to the GEMM compute time).
-
 ![GPU Speedup vs Network Depth](results/plots/mlp/gpu_speedup_num_hidden_layers.png)
 
----
-
-### Overview
+GPUs absorb depth-related overhead almost for free because each per-layer GEMM still fully saturates the SMs; CPU performance falls off steeply once the working set spills out of L3.
 
 ![Scaling Overview](results/plots/mlp/scaling_overview.png)
 
@@ -289,13 +355,11 @@ The depth experiment reveals a key architectural insight: GPU advantage grows wi
 
 ## CNN Scaling Benchmark Analysis
 
-The CNN benchmark uses the same GP regression methodology as MLP, sweeping batch size from 16 to 1024 on the MNIST dataset (60,000 training images, fixed LeNet-5 architecture). Because MNIST is a fixed-size dataset and LeNet-5 has no configurable hidden size or depth, batch size is the only meaningful scaling axis. The CNN benchmarks include cuDNN backend variants (via `--backend cudnn`) alongside the hand-written im2col implementations.
-
-### CNN Peak Throughput
+LeNet-5 on MNIST, batch size 16 – 1024.
 
 | Implementation | Peak Throughput | Notes |
 |---|---|---|
-| Rust cuBLAS (cuDNN) | **262K/s** | cuDNN fused convolution kernels via Rust FFI |
+| Rust cuBLAS (cuDNN) | **262K/s** | cuDNN convolution kernels via Rust FFI |
 | C (cuDNN) | 260K/s | cuDNN convolution backend |
 | Rust Kernels (cuDNN) | 249K/s | cuDNN convolution + custom CUDA FC layers |
 | PyTorch (CUDA) | 187K/s | Built-in cuDNN via autograd |
@@ -306,32 +370,23 @@ The CNN benchmark uses the same GP regression methodology as MLP, sweeping batch
 | C (CPU) | 15K/s | im2col + OpenMP tiled GEMM |
 | Rust (CPU) | 6K/s | im2col + Rayon tiled GEMM |
 
-### Batch Size Scaling (16 -- 1024)
-
-Fixed parameters: MNIST (60K samples), LeNet-5 architecture, epochs = 5.
-
 ![CNN Throughput vs Batch Size](results/plots/cnn/scaling_batch_size.png)
-
-The CNN batch-size sweep tells a different story than MLP because the computational profile is fundamentally different. Where MLP throughput is dominated by large GEMM operations on the fully connected layers, CNN throughput is bottlenecked by the im2col transform and the relatively small GEMMs it produces. Conv1 produces a (6x25) x (25x576) multiply and Conv2 a (16x150) x (150x64) multiply --- both far smaller than the MLP's (batch x hidden) x (hidden x hidden) GEMMs.
-
-The cuDNN implementations dominate the CNN benchmark at ~250--260K samples/s, with the hand-written Rust FFI bindings to cuDNN matching C's cuDNN performance exactly. cuDNN uses specialized convolution algorithms (Winograd, FFT-based) that bypass im2col entirely for common kernel sizes. The custom im2col implementations (C CUDA, Rust cuBLAS, Rust Kernels) cluster at ~150K/s --- competitive but roughly 40% below cuDNN, reflecting the memory traffic cost of materializing the column matrix.
-
-PyTorch CUDA reaches ~187K/s, benefiting from its built-in cuDNN integration but paying Python dispatch and autograd overhead that places it between the cuDNN and custom im2col tiers.
-
-The CPU implementations show wide spread. PyTorch CPU (31K/s) benefits from its optimized CPU convolution path. C (CPU) at 15K/s uses OpenMP parallelism across the per-sample im2col + GEMM loop. Rust (CPU) at 6K/s is the slowest, with Rayon's threadpool incurring more scheduling overhead on the fine-grained per-sample work.
-
 ![CNN GPU Speedup vs Batch Size](results/plots/cnn/gpu_speedup_batch_size.png)
-
-The GPU speedup plot shows Rust cuBLAS / Rust CPU and Rust Kernels / Rust CPU achieving 20--30x speedups at larger batch sizes. C CUDA / C CPU reaches ~10x. The speedup grows with batch size as the GPU SMs are more fully utilized with larger batch GEMMs.
-
 ![CNN Scaling Overview](results/plots/cnn/scaling_overview.png)
+
+---
 
 ## Project Structure
 
 ```
 ML-in-C/
 ├── data/                          # Datasets (downloaded via scripts)
-├── configs/                       # Layered YAML config (base + model overrides)
+├── configs/                       # Layered YAML config (base + per-model)
+│   └── models/
+│       ├── mlp.yaml
+│       ├── cnn.yaml
+│       ├── regression.yaml        # NEW: regression family config
+│       └── sequence.yaml          # NEW: sequence family config
 ├── results/
 │   ├── plots/mlp/                 # MLP benchmark charts
 │   ├── plots/cnn/                 # CNN benchmark charts
@@ -339,58 +394,68 @@ ML-in-C/
 │   └── logs/                      # Benchmark logs (gitignored)
 ├── src/
 │   ├── c/
-│   │   ├── CMakeLists.txt         # Top-level CMake config
-│   │   ├── data_loader.c/.h       # Dataset loaders (C)
-│   │   ├── main.c                 # MLP CLI entry point
-│   │   ├── cnn_main.c             # CNN CLI entry point
-│   │   ├── nn_ops/                # Shared neural network operations
-│   │   │   ├── nn_ops.h           # GEMM, activations, loss, softmax interface
-│   │   │   ├── nn_ops_cpu.c       # CPU implementations (OpenMP)
-│   │   │   └── nn_ops.cu          # CUDA implementations
-│   │   ├── models/mlp/            # MLP model (mlp.h, mlp_cpu.c, mlp.cu)
-│   │   └── models/cnn/            # CNN model (cnn.h, cnn_cpu.c, cnn.cu)
+│   │   ├── CMakeLists.txt
+│   │   ├── main.c                 # MLP CLI
+│   │   ├── cnn_main.c             # CNN CLI
+│   │   ├── regression_main.c      # NEW: regression CLI (self-contained)
+│   │   ├── nn_ops/                # Shared NN ops
+│   │   └── models/
+│   │       ├── mlp/
+│   │       ├── cnn/
+│   │       └── regression/        # NEW: OLS/ridge/lasso (CPU)
 │   ├── rust/
-│   │   ├── Cargo.toml             # Workspace root
-│   │   ├── utils/nn-common/       # Shared data loading, CLI, normalization
-│   │   ├── models/mlp-cpu/        # MLP CPU: Rayon + tiled GEMM
-│   │   ├── models/mlp-cuda-cublas/  # MLP GPU: cuBLAS FFI + custom CUDA kernels
-│   │   ├── models/mlp-cuda-kernels/ # MLP GPU: all custom CUDA kernels
-│   │   ├── models/cnn-cpu/        # CNN CPU: im2col + Rayon tiled GEMM
-│   │   ├── models/cnn-cuda-cublas/  # CNN GPU: cuBLAS GEMM + CUDA kernels
-│   │   └── models/cnn-cuda-kernels/ # CNN GPU: all custom CUDA kernels
+│   │   ├── Cargo.toml
+│   │   ├── utils/nn-common/
+│   │   └── models/
+│   │       ├── mlp-cpu, mlp-cuda-cublas, mlp-cuda-kernels
+│   │       ├── cnn-cpu, cnn-cuda-cublas, cnn-cuda-kernels
+│   │       └── regression-cpu     # NEW: OLS/ridge/lasso (CPU)
 │   ├── python/
-│   │   ├── models/mlp/
-│   │   │   ├── mlp_numpy.py       # NumPy MLP implementation
-│   │   │   └── mlp_pytorch.py     # PyTorch MLP (CPU + CUDA)
-│   │   ├── models/cnn/
-│   │   │   └── cnn_pytorch.py     # PyTorch CNN (CPU + CUDA)
-│   │   └── utils/data_utils.py    # Shared data loading (mirrors C data_loader)
+│   │   ├── models/
+│   │   │   ├── mlp/                       # NumPy + PyTorch MLP
+│   │   │   ├── cnn/                       # PyTorch CNN
+│   │   │   ├── regression/                # NEW: linear, quantile, PyTorch
+│   │   │   ├── trees/                     # NEW: decision tree, RF, GBT
+│   │   │   ├── rnn/                       # NEW: LSTM, GRU
+│   │   │   ├── tcn/                       # NEW: 1D TCN
+│   │   │   ├── transformer/               # NEW: vanilla Transformer encoder
+│   │   │   ├── tft/                       # NEW: Temporal Fusion Transformer
+│   │   │   ├── gp/                        # NEW: Gaussian Process
+│   │   │   ├── hmm/                       # NEW: Hidden Markov Model
+│   │   │   ├── autoencoder/               # NEW: MLP autoencoder
+│   │   │   ├── clustering/                # NEW: K-means + GMM
+│   │   │   └── pca/                       # NEW: PCA
+│   │   └── utils/
+│   │       ├── data_utils.py              # Classification + regression + sequence loaders
+│   │       └── seq_utils.py               # NEW: shared sequence training loop
 │   └── scripts/
-│       ├── pipeline.py            # Unified pipeline: build -> tune -> benchmark -> plot
-│       ├── config.py              # Layered YAML config loader (base + model overrides)
-│       ├── tuning.py              # Two-phase successive halving hyperparameter tuning
-│       ├── benchmark.py           # Benchmark runner (MLP + CNN, standard + scaling)
-│       ├── plotting.py            # Plot generation from cached benchmark data
-│       ├── download_datasets.sh   # Download UCI + MNIST datasets
-│       └── preprocess_iris.py     # Preprocess Iris data
-├── run.sh                         # One-command pipeline with log rotation
-├── build.sh                       # One-command build (detects toolchains)
-├── mathematical_foundations.md    # Math derivations for MLP and CNN algorithms
-├── requirements.txt               # Python dependencies
-├── LICENSE                        # Apache 2.0
+│       ├── pipeline.py            # MLP/CNN pipeline (build -> tune -> benchmark -> plot)
+│       ├── benchmark.py           # MLP/CNN benchmark runner
+│       ├── extras_benchmark.py    # NEW: regression/sequence benchmark runner
+│       ├── tuning.py
+│       ├── plotting.py
+│       └── ...
+├── run.sh
+├── build.sh
+├── mathematical_foundations.md
+├── requirements.txt
 └── README.md
 ```
 
 ## Mathematical Foundations
 
-See [mathematical_foundations.md](mathematical_foundations.md) for detailed derivations covering both the MLP and CNN:
-- Feature normalization (z-score) and Xavier weight initialization
-- Forward/backward propagation with ReLU, numerically stable softmax, and cross-entropy loss
-- The softmax + cross-entropy gradient shortcut
-- Convolution via im2col: transforming sliding-window operations into GEMM
-- Average pooling forward and backward passes
-- col2im gradient scattering with overlap accumulation
-- Mini-batch SGD with gradient averaging
+See [mathematical_foundations.md](mathematical_foundations.md) for derivations covering:
+
+- MLP and CNN: feature normalisation, Xavier init, forward/backward propagation, softmax + cross-entropy gradient, im2col convolution, average pooling, mini-batch SGD/Adam, cosine annealing
+- Linear/ridge/lasso: normal equations, Cholesky, soft-thresholding and coordinate descent
+- Quantile regression: pinball loss and its subgradient
+- CART splitting: weighted SSE reduction
+- Random forest and gradient boosted trees: bagging, stochastic boosting, quantile loss boosting
+- Gaussian processes: posterior mean, posterior variance, log marginal likelihood
+- Hidden Markov Models: forward/backward in log-space, Baum–Welch, Viterbi
+- Sequence models: LSTM/GRU gates, dilated causal convolution, multi-head self-attention
+- Temporal Fusion Transformer: GLU, GRN, Variable Selection Network, interpretable multi-head attention, static covariate encoders
+- PCA, K-Means, GMM, autoencoder reconstruction loss
 
 ## License
 

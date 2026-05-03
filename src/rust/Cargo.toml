@@ -7,5 +7,6 @@ members = [
     "models/cnn-cpu",
     "models/cnn-cuda-cublas",
     "models/cnn-cuda-kernels",
+    "models/regression-cpu",
 ]
 resolver = "2"

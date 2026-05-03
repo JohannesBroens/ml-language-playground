@@ -1,0 +1,61 @@
+# Regression family — linear/ridge/lasso, quantile, decision tree,
+# random forest, gradient boosted trees, GP, k-means/GMM, PCA.
+# Targets continuous variables; "accuracy" in the standard output is
+# overloaded to a model-appropriate score (R^2, coverage, explained var).
+
+training:
+  epochs: 200
+  learning_rate: 0.01
+  batch_size: 256
+  hidden_size: 0          # not used for tabular regression; kept for parity
+  optimizer: adam
+  scheduler: none
+  lambda_reg: 0.1
+
+benchmark:
+  mode: standard
+  datasets:
+    - synthetic-linear
+    - synthetic-nonlinear
+    - california-housing
+  runs: 1
+
+scaling:
+  timeout: 120
+  epochs: 50
+  fixed_batch_size: 256
+  fixed_num_samples: 16384
+  dataset_sizes: [1024, 2048, 4096, 8192, 16384, 32768]
+  batch_sizes: [64, 128, 256, 512, 1024]
+  hidden_sizes: [0]       # not applicable
+  num_hidden_layers: [1]  # not applicable
+
+implementations:
+  - name: "Regression NumPy"
+    cmd: "{python} src/python/models/regression/linear_numpy.py --dataset {dataset} --regularizer l2 --solver closed-form"
+  - name: "Regression PyTorch (CPU)"
+    cmd: "{python} src/python/models/regression/linear_pytorch.py --dataset {dataset} --device cpu --regularizer l2 --solver closed-form"
+  - name: "Regression PyTorch (CUDA)"
+    cmd: "{python} src/python/models/regression/linear_pytorch.py --dataset {dataset} --device cuda --regularizer l2 --solver closed-form"
+  - name: "Regression C (CPU)"
+    cmd: "./src/c/build_cpu/regression_main --regularizer l2"
+    dataset_override: "synthetic-linear"
+  - name: "Regression Rust (CPU)"
+    cmd: "./src/rust/target/release/regression-cpu --regularizer l2"
+    dataset_override: "synthetic-linear"
+  - name: "Quantile Regression NumPy"
+    cmd: "{python} src/python/models/regression/quantile_numpy.py --dataset {dataset} --quantiles 0.1,0.5,0.9"
+  - name: "Decision Tree NumPy"
+    cmd: "{python} src/python/models/trees/decision_tree_numpy.py --dataset {dataset} --max-depth 8"
+  - name: "Random Forest NumPy"
+    cmd: "{python} src/python/models/trees/random_forest_numpy.py --dataset {dataset} --n-estimators 50 --max-depth 10"
+  - name: "Gradient Boosted Trees NumPy"
+    cmd: "{python} src/python/models/trees/gbm_numpy.py --dataset {dataset} --n-estimators 100 --max-depth 3"
+  - name: "Gaussian Process NumPy"
+    cmd: "{python} src/python/models/gp/gp_numpy.py --dataset {dataset} --num-samples 512"
+  - name: "K-Means NumPy"
+    cmd: "{python} src/python/models/clustering/kmeans_numpy.py --dataset {dataset} --num-clusters 4"
+  - name: "GMM NumPy"
+    cmd: "{python} src/python/models/clustering/gmm_numpy.py --dataset {dataset} --num-clusters 4"
+  - name: "PCA NumPy"
+    cmd: "{python} src/python/models/pca/pca_numpy.py --dataset {dataset} --num-components 4"
